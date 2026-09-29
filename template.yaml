@@ -1,0 +1,92 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  us-states-lambda-bluegreen サンプルLambda関数 (Python 3.13, コンテナイメージ)。
+  CodeDeployによるBlue/Greenデプロイ(エイリアス live の一括切替 + 事前検証 + 自動ロールバック)。
+
+Globals:
+  Function:
+    Timeout: 10
+    MemorySize: 128
+    Architectures:
+      - x86_64
+
+Resources:
+  HelloFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: us-states-lambda-bg-sample
+      PackageType: Image
+      # デプロイごとに新バージョン(Green)を発行し、エイリアス live をCodeDeploy経由で切り替える
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
+        Alarms:
+          - !Ref LiveAliasErrorAlarm
+        Hooks:
+          PreTraffic: !Ref PreTrafficHook
+      Events:
+        HelloApi:
+          Type: HttpApi
+          Properties:
+            Path: /hello
+            Method: GET
+    Metadata:
+      DockerContext: ./src
+      Dockerfile: Dockerfile
+      DockerTag: python3.13
+
+  # 切替前にGreenを検証するフック。CodeDeployのサービスロール(AWSCodeDeployRoleForLambda)が
+  # 呼び出せるのは CodeDeployHook_ で始まる関数だけなので、この名前にしている
+  PreTrafficHook:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: CodeDeployHook_us-states-lambda-bg-pretraffic
+      PackageType: Image
+      Timeout: 60
+      Environment:
+        Variables:
+          TARGET_FUNCTION_VERSION: !Ref HelloFunction.Version
+      Policies:
+        - Version: "2012-10-17"
+          Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:us-states-lambda-bg-sample:*"
+            - Effect: Allow
+              Action: codedeploy:PutLifecycleEventHookExecutionStatus
+              Resource: !Sub "arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentgroup:${ServerlessDeploymentApplication}/*"
+      DeploymentPreference:
+        Enabled: false
+    Metadata:
+      DockerContext: ./hooks
+      Dockerfile: Dockerfile
+      DockerTag: python3.13
+
+  # デプロイ中に live エイリアスでエラーが出たら CodeDeploy が Blue へ自動ロールバックする
+  LiveAliasErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: us-states-lambda-bg-live-errors
+      AlarmDescription: live エイリアスのLambdaエラー(Blue/Greenロールバック判定用)
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: Resource
+          Value: !Sub "${HelloFunction}:live"
+        - Name: FunctionName
+          Value: !Ref HelloFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  HelloFunctionArn:
+    Description: サンプルLambda関数のARN
+    Value: !GetAtt HelloFunction.Arn
+  HelloApiUrl:
+    Description: サンプルLambda関数(live エイリアス)を呼び出すエンドポイントURL
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/hello"

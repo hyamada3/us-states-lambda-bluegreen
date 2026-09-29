@@ -1,0 +1,22 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.13
+    commands:
+      - pip install --upgrade pip
+      - pip install aws-sam-cli
+  pre_build:
+    commands:
+      - pip install -r requirements.txt
+      - pytest tests/ -v
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "${IMAGE_REPOSITORY%%/*}"
+  build:
+    commands:
+      - sam build
+      - sam package --image-repository "$IMAGE_REPOSITORY" --output-template-file packaged.yaml
+
+artifacts:
+  files:
+    - packaged.yaml
