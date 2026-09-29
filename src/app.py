@@ -1,7 +1,7 @@
 import json
 
 # Blue/Greenの切替を確認しやすいよう、レスポンスにアプリのバージョンを含める
-APP_VERSION = "v1"
+APP_VERSION = "v2"
 
 
 def handler(event, context):
